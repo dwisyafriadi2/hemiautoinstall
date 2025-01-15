@@ -1,138 +1,201 @@
 #!/bin/bash
 
-# Function to print the banner
-print_banner() {
-  echo """
-    ____                       
-   / __ \\____ __________ ______
-  / / / / __ \`/ ___/ __ \`/ ___/
- / /_/ / /_/ (__  ) /_/ / /    
-/_____/_\\__,_/____/\\__,_/_/     
-
-    ____                       __
-   / __ \\___  ____ ___  __  __/ /_  ______  ____ _
-  / /_/ / _ \\/ __ \`__ \\/ / / / / / / / __ \\/ __ \`/
- / ____/  __/ / / / / / /_/ / / /_/ / / / / /_/ / 
-/_/    \\___/_/ /_/ /_/\\__,_/_/\\__,_/_/ /_/\\__, /  
-                                         /____/    
-
-====================================================
-     Automation         : Auto Install Node Hemi
-     Telegram Channel   : @dasarpemulung
-     Telegram Group     : @parapemulung
-====================================================
-"""
+# Logging Functions
+log() {
+    echo -e "\033[1;34m[INFO]\033[0m $1"
 }
 
-# Call the print_banner function
-print_banner
+success() {
+    echo -e "\033[1;32m[SUCCESS]\033[0m $1"
+}
 
-# Determine the appropriate home directory based on user
-if [ "$EUID" -eq 0 ]; then
-    USER_HOME="/root"
-else
-    USER_HOME="/home/$(whoami)"
-fi
+warning() {
+    echo -e "\033[1;33m[WARNING]\033[0m $1"
+}
 
-# Define variables using the user's home directory
-DOWNLOAD_URL="https://github.com/hemilabs/heminetwork/releases/download/v0.5.0/heminetwork_v0.5.0_linux_amd64.tar.gz"
-DOWNLOAD_FILE="$USER_HOME/heminetwork_v0.5.0_linux_amd64.tar.gz"
-EXTRACT_DIR="$USER_HOME/heminetwork_v0.5.0_linux_amd64"
-KEYGEN_OUTPUT="$USER_HOME/popm-address.json"
-SERVICE_FILE="/etc/systemd/system/hemipopminer.service"
-
-# Remove existing download file and extraction folder if they exist
-if [ -f "$DOWNLOAD_FILE" ]; then
-    echo "Removing existing download file $DOWNLOAD_FILE..."
-    rm -f "$DOWNLOAD_FILE"
-fi
-
-if [ -d "$EXTRACT_DIR" ]; then
-    echo "Removing existing directory $EXTRACT_DIR..."
-    rm -rf "$EXTRACT_DIR"
-fi
-
-# Check if jq is installed, install if necessary
-if ! command -v jq &> /dev/null; then
-    echo "jq not found. Installing jq..."
-    sudo apt update && sudo apt install -y jq
-fi
-
-# Step 1: Download the file
-echo "Downloading Hemi Network binary..."
-curl -L $DOWNLOAD_URL -o $DOWNLOAD_FILE
-
-# Check if the file downloaded successfully
-if [ ! -f $DOWNLOAD_FILE ]; then
-    echo "Error: Download failed. Please check the URL and network connection."
+error() {
+    echo -e "\033[1;31m[ERROR]\033[0m $1"
     exit 1
-fi
+}
 
-# Step 2: Extract the downloaded file
-echo "Extracting Hemi Network binary..."
-mkdir -p $EXTRACT_DIR
-tar -xzvf $DOWNLOAD_FILE -C $USER_HOME
+# Variables
+DOWNLOAD_URL="https://github.com/hemilabs/heminetwork/releases/download/v0.11.0/heminetwork_v0.11.0_linux_amd64.tar.gz"
+HOME_DIR="$HOME/heminetwork_v0.11.0_linux_amd64"
+ENV_FILE="$HOME_DIR/.env"
 
-# Verify extracted files
-echo "Verifying extracted files..."
-ls -l $EXTRACT_DIR
+# Install Docker if necessary
+check_and_install_docker() {
+    log "Checking if Docker is installed..."
+    if ! command -v docker &> /dev/null; then
+        log "Docker is not installed. Installing Docker..."
+        sudo apt update || error "Failed to update package lists."
+        sudo apt install -y docker.io || error "Failed to install Docker."
+        sudo systemctl enable docker || error "Failed to enable Docker service."
+        sudo systemctl start docker || error "Failed to start Docker service."
+        success "Docker installed successfully."
+    else
+        success "Docker is already installed."
+    fi
+}
 
-# Verify that keygen exists after extraction
-if [ ! -f $EXTRACT_DIR/keygen ]; then
-    echo "Error: keygen executable not found in $EXTRACT_DIR. Extraction may have failed."
-    echo "Contents of $EXTRACT_DIR:"
-    ls -la $EXTRACT_DIR  # List contents for diagnostic purposes
-    exit 1
-fi
+# Install the miner
+# Install the miner
+install_miner() {
+    log "Checking for existing installation of Hemi PoP Miner..."
+    if [ -d "$HOME_DIR" ]; then
+        log "Existing installation found. Removing it..."
+        rm -rf "$HOME_DIR" || error "Failed to remove existing installation at $HOME_DIR."
+        log "Existing installation removed successfully."
+    fi
 
-# Ensure keygen is executable
-chmod +x $EXTRACT_DIR/keygen
+    log "Creating directory for Hemi PoP Miner..."
+    mkdir -p "$HOME_DIR" || error "Failed to create directory $HOME_DIR."
 
-# Step 3: Generate the address
-echo "Generating address..."
-if $EXTRACT_DIR/keygen -secp256k1 -json -net="testnet" > $KEYGEN_OUTPUT; then
-    echo "Address generated at $KEYGEN_OUTPUT"
-else
-    echo "Error: keygen executable failed to run."
-    exit 1
-fi
+    log "Downloading the Hemi PoP Miner..."
+    curl -L "$DOWNLOAD_URL" -o "$HOME_DIR/heminetwork.tar.gz" || error "Failed to download the miner."
 
-# Step 4: Extract the private key
-PRIVATE_KEY=$(jq -r '.private_key' $KEYGEN_OUTPUT)
-if [ -z "$PRIVATE_KEY" ]; then
-    echo "Error: Private key not found in $KEYGEN_OUTPUT"
-    exit 1
-fi
+    log "Extracting the miner files..."
+    tar -xzf "$HOME_DIR/heminetwork.tar.gz" -C "$HOME_DIR" --strip-components=1 || error "Failed to extract the miner files."
 
-# Display the generated address details
-cat $KEYGEN_OUTPUT
+    log "Setting executable permissions for binaries..."
+    chmod +x "$HOME_DIR"/* || log "No binary files to make executable."
 
-# Step 5: Create systemd service for hemipopminer
-echo "Creating systemd service for hemipopminer..."
-cat << EOF | sudo tee $SERVICE_FILE
-[Unit]
-Description=Hemi Network hemipopminer Service
-After=network.target
+    success "Miner installed successfully in $HOME_DIR."
+}
 
-[Service]
-Type=simple
-WorkingDirectory=$EXTRACT_DIR
-Environment="POPM_BTC_PRIVKEY=$PRIVATE_KEY"
-Environment="POPM_STATIC_FEE=50"
-Environment="POPM_BFG_URL=wss://testnet.rpc.hemi.network/v1/ws/public"
-ExecStart=$EXTRACT_DIR/popmd
-Restart=always
-User=$(whoami)
 
-[Install]
-WantedBy=multi-user.target
-EOF
+# Configure environment variables
+configure_env() {
+    log "Configuring environment variables..."
+    
+    # Ensure the directory exists
+    if [ ! -d "$HOME_DIR" ]; then
+        log "The directory $HOME_DIR does not exist. Creating it..."
+        mkdir -p "$HOME_DIR" || error "Failed to create directory $HOME_DIR."
+    fi
 
-# Step 6: Reload systemd, enable and start the hemipopminer service
-sudo systemctl daemon-reload
-sudo systemctl enable hemipopminer
-sudo systemctl start hemipopminer
+    # Check if .env file exists
+    if [ ! -f "$ENV_FILE" ]; then
+        log "Creating .env file at $ENV_FILE..."
+        touch "$ENV_FILE" || error "Failed to create .env file at $ENV_FILE."
+    fi
 
-echo "hemipopminer service has been installed and started."
-echo "Use 'systemctl status hemipopminer' to check the service status."
+    # Prompt for environment variables
+    read -sp "Enter your EVM Private Key: " EVM_PRIVKEY
+    echo ""
+    read -sp "Enter your Bitcoin Private Key: " POPM_BTC_PRIVKEY
+    echo ""
+    read -p "Enter your desired static fee (default: 50 sats/vB): " POPM_STATIC_FEE
+    POPM_STATIC_FEE=${POPM_STATIC_FEE:-50}
 
+    # Write environment variables to .env file
+    {
+        echo "POPM_BFG_URL=wss://testnet.rpc.hemi.network/v1/ws/public"
+        echo "POPM_BTC_PRIVKEY=$POPM_BTC_PRIVKEY"
+        echo "EVM_PRIVKEY=$EVM_PRIVKEY"
+        echo "POPM_STATIC_FEE=$POPM_STATIC_FEE"
+    } > "$ENV_FILE"
+
+    success "Environment variables configured successfully and saved to $ENV_FILE."
+}
+
+
+# Start the miner
+start_miner() {
+    log "Starting the PoP Miner..."
+    
+    # Ensure the logs directory exists
+    LOG_DIR="$HOME_DIR/logs"
+    mkdir -p "$LOG_DIR" || error "Failed to create logs directory at $LOG_DIR."
+    LOG_FILE="$LOG_DIR/hemi.logs"
+
+    # Navigate to the miner directory and start the miner
+    cd "$HOME_DIR" || error "Failed to navigate to the miner directory."
+    export $(grep -v '^#' "$ENV_FILE" | xargs)
+    nohup ./popmd > "$LOG_FILE" 2>&1 &
+    if [ $? -ne 0 ]; then
+        error "Failed to start the PoP Miner."
+    fi
+    
+    success "PoP Miner started successfully. Logs are being saved to $LOG_FILE."
+}
+
+# Check logs
+check_logs() {
+    LOG_FILE="$HOME_DIR/logs/hemi.logs"
+    if [ ! -f "$LOG_FILE" ]; then
+        warning "No log file found at $LOG_FILE. Start the miner to generate logs."
+        return
+    fi
+    log "Displaying the last 20 lines of the log file ($LOG_FILE):"
+    tail -n 20 "$LOG_FILE"
+    read -p "Press Enter to continue viewing logs, or Ctrl+C to exit..."
+    less "$LOG_FILE"
+}
+
+
+# Uninstall the miner
+uninstall_miner() {
+    log "Uninstalling Hemi PoP Miner..."
+    if [ -d "$HOME_DIR" ]; then
+        rm -rf "$HOME_DIR" || error "Failed to remove $HOME_DIR."
+        success "Hemi PoP Miner files removed from $HOME_DIR."
+    else
+        warning "Hemi PoP Miner is not installed."
+    fi
+}
+
+
+# Stop the miner
+stop_miner() {
+    log "Stopping the PoP Miner..."
+    PIDS=$(pgrep -f "./popmd")
+    
+    if [ -z "$PIDS" ]; then
+        warning "No running PoP Miner process found."
+        return
+    fi
+
+    for PID in $PIDS; do
+        log "Stopping PoP Miner process with PID $PID..."
+        kill "$PID" || error "Failed to stop the PoP Miner process with PID $PID."
+    done
+
+    success "All PoP Miner processes have been stopped."
+}
+
+
+
+# Main menu
+main_menu() {
+    clear
+    curl -s https://raw.githubusercontent.com/dwisyafriadi2/logo/main/logo.sh | bash
+    log "Welcome to the Hemi PoP Miner Installer!"
+    echo "1. Install the Miner"
+    echo "2. Configure Environment Variables"
+    echo "3. Start the PoP Miner"
+    echo "4. Stop the PoP Miner"
+    echo "5. Install Docker (if not installed)"
+    echo "6. Uninstall the Miner"
+    echo "7. Check Logs"
+    echo "8. Exit"
+    
+    read -p "Select an option (1-8): " choice
+    case $choice in
+        1) install_miner ;;
+        2) configure_env ;;
+        3) start_miner ;;
+        4) stop_miner ;;
+        5) check_and_install_docker ;;
+        6) uninstall_miner ;;
+        7) check_logs ;;
+        8) success "Goodbye!"; exit 0 ;;
+        *) warning "Invalid option. Please select a valid choice." ;;
+    esac
+    read -p "Press Enter to return to the main menu..."
+    main_menu
+}
+
+
+# Start the script
+main_menu
